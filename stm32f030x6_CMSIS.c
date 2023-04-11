@@ -221,7 +221,33 @@ __WEAK void TIM3_IRQHandler(void) {
     //TIM3->CCR1 = 0;
 //}
 
+void CMSIS_TIM14_init(void) {
+    /*Включим тактирование таймера (страница 48)*/
+    SET_BIT(RCC->APB1ENR, RCC_APB1ENR_TIM14EN); //Запуск тактирования таймера 14
+    
+    //TIMx control register 1 (TIMx_CR1)
 
+    CLEAR_BIT(TIM14->CR1, TIM_CR1_UDIS); //Генерировать событие Update
+    CLEAR_BIT(TIM14->CR1, TIM_CR1_URS); //Генерировать прерывание
+    CLEAR_BIT(TIM14->CR1, TIM_CR1_OPM); //One pulse mode off(Счетчик не останавливается при обновлении)
+    CLEAR_BIT(TIM14->CR1, TIM_CR1_DIR); //Считаем вниз
+    MODIFY_REG(TIM14->CR1, TIM_CR1_CMS_Msk, 0b00 << TIM_CR1_CMS_Pos); //Выравнивание по краю
+    SET_BIT(TIM14->CR1, TIM_CR1_ARPE); //Auto-reload preload enable
+    MODIFY_REG(TIM14->CR1, TIM_CR1_CKD_Msk, 0b00 << TIM_CR1_CKD_Pos); //Предделение выключено
+
+    /*Настройка прерываний*/
+    //TIMx DMA/Interrupt enable register (TIMx_DIER)
+    SET_BIT(TIM14->DIER, TIM_DIER_UIE); //Update interrupt enable
+
+    //TIMx status register (TIMx_SR) - Статусные регистры
+
+    TIM14->PSC = 4800 - 1;
+    TIM14->ARR = 300 - 1;
+
+    NVIC_SetPriority(TIM14_IRQn, 3);
+    NVIC_EnableIRQ(TIM14_IRQn); //Разрешить прерывания по таймеру 14
+    SET_BIT(TIM14->CR1, TIM_CR1_CEN); //Запуск таймера
+}
 
 /*================================= НАСТРОЙКА ADC ============================================*/
 
@@ -429,4 +455,149 @@ bool CMSIS_USART_Transmit(USART_TypeDef* USART, uint8_t* data, uint16_t Size, ui
         USART->TDR = *data++; //Кидаем данные  
     }
     return true;
+}
+
+/*================================= Работа с FLASH ============================================*/
+
+/*Пример структуры для работы с FLASH*/
+/*
+typedef struct __attribute__((packed)) {
+    uint8_t Data1;
+    uint16_t Data2;
+    uint32_t Data3;
+    float Data4;
+} Flash_struct;
+
+Flash_struct Flash_data_STM;
+Flash_struct Flash_data_STM1;*/
+
+/*Пример работы с FLASH*/
+/*
+Flash_data_STM.Data1 = 0x23;
+Flash_data_STM.Data2 = 0x4567;
+Flash_data_STM.Data3 = 0x89101112;
+Flash_data_STM.Data4 = 3.14159f;
+FLASH_Page_write(0x08007C00, (uint8_t*)&Flash_data_STM, sizeof(Flash_data_STM));
+FLASH_Read_data(0x08007C00, (uint8_t*)&Flash_data_STM1, sizeof(Flash_data_STM1));
+*/
+        
+
+/**
+ ***************************************************************************************
+ *  @breif Разблокировка FLASH
+ *  Чтоб разблокировать FLASH, нужно в FLASH->KEYR ввести поочередно 2 ключа.
+  ***************************************************************************************
+ */
+void FLASH_Unlock(void) {
+    FLASH->KEYR = 0x45670123; //KEY1
+    FLASH->KEYR = 0xCDEF89AB; //KEY2
+}
+
+/**
+ ***************************************************************************************
+ *  @breif Блокировка FLASH
+ *  Чтоб заблокировать FLASH, нужно в FLASH->CR, FLASH_CR_LOCK выставить 1
+  ***************************************************************************************
+ */
+void FLASH_Lock(void) {
+    SET_BIT(FLASH->CR, FLASH_CR_LOCK);
+}
+
+/**
+ ***************************************************************************************
+ *  @breif Стирание страницы во FLASH
+ *  @param  Adress - Адрес во flash
+ ***************************************************************************************
+ */
+void FLASH_Page_erase(uint16_t Adress) {
+    //Если память заблокирована, то разблокируем ее
+    if (READ_BIT(FLASH->CR, FLASH_CR_LOCK)) {
+        FLASH_Unlock();
+    }
+    SET_BIT(FLASH->CR, FLASH_CR_PER); //Выберем функцию очистки страницы
+    FLASH->AR = Adress; //Укажем адрес
+    SET_BIT(FLASH->CR, FLASH_CR_STRT); //Запустим стирание
+    while (READ_BIT(FLASH->SR, FLASH_SR_BSY)) ; //Ожидаем, пока пройдет стирание
+    while (READ_BIT(FLASH->SR, FLASH_SR_EOP) == 0) ; //Дождемся флага завершения программы
+    CLEAR_BIT(FLASH->CR, FLASH_CR_PER); //Выключим функцию.
+    FLASH_Lock(); //Заблокируем память
+}
+
+/**
+ ***************************************************************************************
+ *  @breif Запись страницы во FLASH
+ *  Programming Manual PM0075
+ *  см. п.п. 2.3.3 Main Flash memory programming(стр. 13)
+ *  @param  Adress - Адрес во flash
+ *  @param  *Data - Данные, которые будем писать во flash
+ *  @param  Size - Размер даных, которые будем писать во flash
+ ***************************************************************************************
+ */
+void FLASH_Page_write(uint32_t Adress, uint8_t *Data, uint16_t Size) {
+    //Проверка размера данных на четность
+    //Если размер нечетный
+    if (Size % 2) {
+        Size = (Size / 2); //Размер в Half-word
+        FLASH_Page_erase(Adress); //Произведем стирание страницы
+        //Если память заблокирована, то разблокируем ее
+        if (READ_BIT(FLASH->CR, FLASH_CR_LOCK)) {
+            FLASH_Unlock();
+        }
+        SET_BIT(FLASH->CR, FLASH_CR_PG); //Выберем программу "programming"
+        //Заполним ячейки по 16 бит
+        for (int i = 0; i < Size; i++) {
+            *(uint16_t*)(Adress + i * 2) = *((uint16_t*)(Data) + i);
+        }
+        //Заполним остаток в 8 бит
+        *(uint16_t*)(Adress + Size * 2) = *((uint8_t*)(Data) + Size * 2);
+    }
+    //Если размер четный
+    else {
+        Size = (Size / 2); //Размер в Half-word
+        FLASH_Page_erase(Adress); //Произведем стирание страницы
+        //Если память заблокирована, то разблокируем ее
+        if (READ_BIT(FLASH->CR, FLASH_CR_LOCK)) {
+            FLASH_Unlock();
+        }
+        SET_BIT(FLASH->CR, FLASH_CR_PG); //Выберем программу "programming"
+        //Заполним ячейки по 16 бит
+        for (int i = 0; i < Size; i++) {
+            *(uint16_t*)(Adress + i * 2) = *((uint16_t*)(Data) + i);
+        }
+    }
+    while (READ_BIT(FLASH->SR, FLASH_SR_BSY)) ;
+    while (READ_BIT(FLASH->SR, FLASH_SR_EOP) == 0) ;
+    CLEAR_BIT(FLASH->CR, FLASH_CR_PG);
+    FLASH_Lock(); 
+}
+
+/**
+ ***************************************************************************************
+ *  @breif Считывание данных с FLASH. 
+ *  Programming Manual PM0075
+ *  см. п.п. 2.3.3 Main Flash memory programming(стр. 13)
+ *  @param  Adress - Адрес во flash, откуда будем забирать данные
+ *  @param  *Data - Данные, куда будем записывать информацию из flash с указанного адреса
+ *  @param  Size - Размер даных. Сколько байт будем считывать.
+ ***************************************************************************************
+ */
+void FLASH_Read_data(uint32_t Adress, uint8_t *Data, uint16_t Size) {
+    //Проверка размера данных на четность
+    //Если размер структуры в байтах нечетный
+    if (Size % 2) {
+        Size = (Size / 2); //Размер в Half-word
+        //Считаем данные по 16 бит
+        for (uint16_t i = 0; i < Size; i++) {
+            *((uint16_t*)Data + i) = *(uint16_t*)(Adress + i * 2);
+        }
+        //Считаем оставшиеся 8 бит
+        *((uint8_t*)Data + Size * 2) = *(uint16_t*)(Adress + Size * 2);
+    }//Если размер структуры в байтах четный
+    else {
+        Size = (Size / 2); //Размер в Half-word
+        //Считаем информацию по 16 бит
+        for (uint16_t i = 0; i < Size; i++) {
+            *((uint16_t*)Data + i) = *(uint16_t*)(Adress + i * 2);
+        }
+    }
 }
