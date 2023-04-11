@@ -23,15 +23,6 @@
 #include "main.h"
 #include <stdbool.h>
 
-
-//Структура по USART
-struct USART_name {
-    uint8_t tx_buffer[20]; //Буфер под выходящие данные
-    uint8_t rx_buffer[20]; //Буфер под входящие данные
-    uint16_t rx_counter; //Счетчик приходящих данных типа uint8_t по USART
-    uint16_t rx_len; //Количество принятых байт после сработки флага IDLE
-};
-
 void CMSIS_Debug_init(void);
 void CMSIS_RCC_SystemClock_48MHz(void);
 void CMSIS_SysTick_Timer_init(void);
@@ -42,7 +33,13 @@ void CMSIS_PB1_OUTPUT_Push_Pull_init(void);
 void CMSIS_PB7_OUTPUT_Push_Pull_init(void);
 void CMSIS_TIM3_init(void);
 void TIM3_IRQHandler(void);
+void CMSIS_TIM14_init(void);
 void CMSIS_ADC_DMA_init(void);
 void CMSIS_USART1_Init(void);
 void USART1_IRQHandler(void);
 bool CMSIS_USART_Transmit(USART_TypeDef* USART, uint8_t* data, uint16_t Size, uint32_t Timeout_ms);
+void FLASH_Unlock(void);
+void FLASH_Lock(void);
+void FLASH_Page_erase(uint16_t Adress);
+void FLASH_Page_write(uint32_t Adress, uint8_t *Data, uint16_t Size);
+void FLASH_Read_data(uint32_t Adress, uint8_t *Data, uint16_t Size);
